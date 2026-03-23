@@ -148,8 +148,70 @@ function Chips({ filter, setFilter }) {
   </div>);
 }
 
+// ─── PIN LOCK ───
+// Change ce code PIN pour le tien
+const PIN_CODE = "4682";
+
+function PinLock({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+
+  const handleDigit = (d) => {
+    const next = pin + d;
+    setError(false);
+    if (next.length === 4) {
+      if (next === PIN_CODE) {
+        sessionStorage.setItem("tai_unlocked", "1");
+        onUnlock();
+      } else {
+        setError(true);
+        setPin("");
+      }
+    } else {
+      setPin(next);
+    }
+  };
+
+  const handleDelete = () => { setPin(p => p.slice(0, -1)); setError(false); };
+
+  return (
+    <div style={{ fontFamily: "'DM Sans',sans-serif", background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24, padding: 20 }}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
+      <div style={{ width: 44, height: 44, borderRadius: 12, background: C.accentSoft, border: `2px solid ${C.accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700, color: C.accent }}>T</div>
+      <div style={{ fontSize: 14, color: C.textSoft }}>Entrez le code</div>
+      <div style={{ display: "flex", gap: 12 }}>
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: i < pin.length ? C.accent : "transparent", border: `2px solid ${error ? C.danger : i < pin.length ? C.accent : C.border}`, transition: "all .2s" }} />
+        ))}
+      </div>
+      {error && <div style={{ fontSize: 12, color: C.danger }}>Code incorrect</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginTop: 8 }}>
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, "del"].map((d, i) => {
+          if (d === null) return <div key={i} />;
+          if (d === "del") return (
+            <button key={i} onClick={handleDelete} style={{ width: 64, height: 64, borderRadius: 32, background: "transparent", border: "none", color: C.textSoft, fontSize: 16, cursor: "pointer", fontFamily: "inherit" }}>←</button>
+          );
+          return (
+            <button key={i} onClick={() => handleDigit(String(d))} style={{ width: 64, height: 64, borderRadius: 32, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 22, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all .15s" }}>{d}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════
 export default function App() {
+  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("tai_unlocked") === "1");
+
+  if (!unlocked) {
+    return <PinLock onUnlock={() => setUnlocked(true)} />;
+  }
+
+  return <MainApp />;
+}
+
+function MainApp() {
   const [entries, setEntries] = useState([]);
   const [periods, setPeriods] = useState([]);
   const [tab, setTab] = useState("home");
