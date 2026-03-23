@@ -71,12 +71,11 @@ async function apiGet() {
 
 async function apiPost(body) {
   try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      redirect: "follow",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify(body),
-    });
+    // Google Apps Script redirige les POST et perd le body
+    // Solution : passer les données en paramètre GET encodé
+    const params = encodeURIComponent(JSON.stringify(body));
+    const url = API_URL + "?data=" + params;
+    const res = await fetch(url, { redirect: "follow" });
     const data = await res.json();
     return data;
   } catch (err) {
