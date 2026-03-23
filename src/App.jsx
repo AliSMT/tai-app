@@ -85,6 +85,17 @@ async function apiPost(body) {
   }
 }
 
+// ─── Data sanitization ───
+function cleanSessions(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(e => e && typeof e.date === "string" && e.date.length >= 10 && (e.type === "solo" || e.type === "duo"));
+}
+
+function cleanCycles(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(c => c && typeof c.start === "string" && c.start.length >= 10 && typeof c.end === "string" && c.end.length >= 10);
+}
+
 // ─── Utils ───
 const MFR = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
 const MFULL = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
@@ -217,8 +228,8 @@ export default function App() {
           setSyncing(false);
           setSyncStatus(importRes && importRes.success ? "ok" : "error");
         } else {
-          setEntries(data.sessions);
-          setPeriods(data.cycles || []);
+          setEntries(cleanSessions(data.sessions));
+          setPeriods(cleanCycles(data.cycles || []));
           setSyncStatus("ok");
         }
       } else {
@@ -234,8 +245,8 @@ export default function App() {
   const reload = useCallback(async () => {
     const data = await apiGet();
     if (data && data.sessions) {
-      setEntries(data.sessions);
-      setPeriods(data.cycles || []);
+      setEntries(cleanSessions(data.sessions));
+      setPeriods(cleanCycles(data.cycles || []));
       setSyncStatus("ok");
     }
   }, []);
@@ -244,7 +255,7 @@ export default function App() {
   const addEntry = async () => {
     // Optimistic update
     const newEntry = { date: addDate, type: addType };
-    const updated = [...entries, newEntry].sort((a, b) => a.date.localeCompare(b.date));
+    const updated = [...entries, newEntry].filter(e => e && e.date).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     setEntries(updated);
     setModal(null);
     // Sync to API
@@ -265,7 +276,7 @@ export default function App() {
 
   const addPeriodFn = async () => {
     const newP = { start: pStart, end: pEnd };
-    const updated = [...periods, newP].sort((a, b) => a.start.localeCompare(b.start));
+    const updated = [...periods, newP].sort((a, b) => (a.start || "").localeCompare(b.start || ""));
     setPeriods(updated);
     setModal(null);
     const res = await apiPost({ action: "addCycle", start: pStart, end: pEnd });
@@ -289,7 +300,9 @@ export default function App() {
   // ─── Stats ───
   const stats = useMemo(() => {
     if (fE.length === 0) return null;
-    const sorted = [...fE].sort((a, b) => a.date.localeCompare(b.date));
+    const valid = fE.filter(e => e && e.date && e.type);
+    if (valid.length === 0) return null;
+    const sorted = [...valid].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     const first = prsD(sorted[0].date);
     const last = prsD(sorted[sorted.length - 1].date);
     const totalDays = Math.max(1, diffD(first, last));
@@ -354,7 +367,7 @@ export default function App() {
   // ─── Periods ───
   const pInfo = useMemo(() => {
     if (periods.length === 0) return null;
-    const s = [...periods].sort((a, b) => a.start.localeCompare(b.start));
+    const s = [...periods].filter(p => p && p.start && p.end).sort((a, b) => (a.start || "").localeCompare(b.start || ""));
     const last = s[s.length - 1];
     let avgC = 28, avgD = 5;
     if (s.length >= 2) {
@@ -404,7 +417,7 @@ export default function App() {
   // ─── Export ───
   const exportCSV = () => {
     let csv = "Date,Type\n";
-    [...entries].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => { csv += e.date + "," + e.type + "\n"; });
+    [...entries].filter(e => e && e.date).sort((a, b) => (a.date || "").localeCompare(b.date || "")).forEach(e => { csv += e.date + "," + e.type + "\n"; });
     csv += "\nCycles menstruels\nDebut,Fin,Duree\n";
     periods.forEach(p => { csv += p.start + "," + p.end + "," + diffD(prsD(p.start), prsD(p.end)) + "j\n"; });
     const b = new Blob([csv], { type: "text/csv" });
@@ -419,7 +432,7 @@ export default function App() {
     const a = document.createElement("a"); a.href = u; a.download = "tai-export.json"; a.click();
   };
 
-  const years = useMemo(() => [...new Set(entries.map(e => parseInt(e.date.slice(0, 4))))].sort(), [entries]);
+  const years = useMemo(() => [...new Set(entries.filter(e => e && e.date).map(e => parseInt(e.date.slice(0, 4))))].filter(y => !isNaN(y)).sort(), [entries]);
 
   const prevCal = () => { if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); } else setCalMonth(m => m - 1); };
   const nextCal = () => { if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); };
