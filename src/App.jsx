@@ -6,7 +6,7 @@ import {
 } from "recharts";
 
 // ─── API ───
-const API_URL = "https://script.google.com/macros/s/AKfycbwJzOHf5yMb-Dzx9_plHub-wYjXo8TgqudtiHVoOjsY773cjKaskSzCvzp1tS8QxLA/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxrPJcwUr1ER0LN4AT9oNqRZDzB5GfMv9yt7HVTDK3soQ6rV3JbHpkx0mWOgxS4yrA/exec";
 
 const SEED = [
   {"date":"2025-01-02","type":"duo"},{"date":"2025-01-10","type":"duo"},{"date":"2025-01-14","type":"duo"},
