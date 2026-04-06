@@ -5,44 +5,48 @@ import {
   CartesianGrid, PieChart, Pie, Cell, LineChart, Line
 } from "recharts";
 
-// ─── SUPABASE CONFIG ───
-const SUPA_URL = "https://haqiritxlvzntjnfnygt.supabase.co";
-const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhhcWlyaXR4bHZ6bnRqbmZueWd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzMDQ1OTMsImV4cCI6MjA4OTg4MDU5M30.LafNID9LKw5Wft5a7XTqzNtQ_mcY7qdqmQJ-shaLldw";
-const HEADERS = {
-  "apikey": SUPA_KEY,
-  "Authorization": "Bearer " + SUPA_KEY,
-  "Content-Type": "application/json",
-  "Prefer": "return=minimal",
-};
+// ─── TURSO CONFIG ───
+const TURSO_URL = "https://tai-alismt.aws-eu-west-1.turso.io";
+const TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzU1MTA2MjYsImlkIjoiMDE5ZDY0YWQtN2MwMS03MTAwLWJlY2YtOWY3YWM2ZjBjNzRkIiwicmlkIjoiY2VjZjVlYzAtODJiYy00MTgwLTkwYmItZTM4OWViNjdmZWQ2In0.OAcpkuXM9_wcKP9yi2DqdfIF_oO-CQSVX7Mekak6oA3ctNJKcCnP0hCUka9dQAbkjM7kUDY12evKBf19U6rNCA";
 
-// ─── Supabase REST helpers ───
-async function supa(table, method, body, query) {
+// ─── Turso HTTP API helper ───
+async function tursoExec(sql, args) {
   try {
-    const url = SUPA_URL + "/rest/v1/" + table + (query || "");
-    const opts = { method, headers: { ...HEADERS } };
-    if (method === "GET") {
-      opts.headers["Prefer"] = undefined;
-      delete opts.headers["Prefer"];
+    const body = {
+      requests: [
+        { type: "execute", stmt: { sql, args: args || [] } },
+        { type: "close" }
+      ]
+    };
+    const res = await fetch(TURSO_URL + "/v2/pipeline", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + TURSO_TOKEN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.results && data.results[0] && data.results[0].response) {
+      const resp = data.results[0].response;
+      if (resp.type === "execute") {
+        const cols = resp.result.cols.map(c => c.name);
+        const rows = resp.result.rows.map(r => {
+          const obj = {};
+          r.forEach((cell, i) => { obj[cols[i]] = cell.value; });
+          return obj;
+        });
+        return { ok: true, rows, affected: resp.result.affected_row_count };
+      }
     }
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(url, opts);
-    if (method === "GET") return await res.json();
-    return { success: res.ok };
+    return { ok: true, rows: [], affected: 0 };
   } catch (err) {
-    console.error("Supabase error:", err);
-    return null;
+    console.error("Turso error:", err);
+    return { ok: false, rows: [], affected: 0 };
   }
 }
 
-async function loadAll() {
-  const [sessions, cycles] = await Promise.all([
-    supa("sessions", "GET", null, "?select=date,type&order=date.asc"),
-    supa("cycles", "GET", null, '?select=start,"end"&order=start.asc'),
-  ]);
-  return { sessions, cycles };
-}
-
-// ─── Seed data ───
+// ─── Seed data (fallback if DB unreachable) ───
 const SEED = [
   {"date":"2025-01-02","type":"duo"},{"date":"2025-01-10","type":"duo"},{"date":"2025-01-14","type":"duo"},
   {"date":"2025-01-19","type":"duo"},{"date":"2025-01-23","type":"duo"},{"date":"2025-01-29","type":"duo"},
@@ -89,13 +93,12 @@ const SEED = [
 const MFR = ["Jan","Fév","Mar","Avr","Mai","Jun","Jul","Aoû","Sep","Oct","Nov","Déc"];
 const MFULL = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 const DFR = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"];
-
 function fmtD(d) { return d.toISOString().slice(0, 10); }
 function prsD(s) { const p = s.split("-").map(Number); return new Date(p[0], p[1] - 1, p[2]); }
 function diffD(a, b) { return Math.round((b - a) / 86400000); }
 function getMon(d) { const dt = new Date(d); const day = dt.getDay(); dt.setDate(dt.getDate() - (day === 0 ? 6 : day - 1)); return fmtD(dt); }
 function clean(arr) { return (arr || []).filter(e => e && e.date && e.type); }
-function cleanC(arr) { return (arr || []).filter(c => c && c.start && c.end); }
+function cleanC(arr) { return (arr || []).filter(c => c && c.start && c.end_date); }
 
 const NOW = new Date();
 const NOW_S = fmtD(NOW);
@@ -116,84 +119,40 @@ const C = {
   accent: "#d4a574", accentSoft: "rgba(212,165,116,0.12)",
   danger: "#ef4444", success: "#22c55e",
 };
-
 const crd = { background: C.card, borderRadius: 16, padding: "18px 20px", border: `1px solid ${C.border}` };
-function pill(on, col) {
-  const c = col || C.accent;
-  return { padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${on ? c : C.border}`, background: on ? c + "18" : "transparent", color: on ? c : C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all .2s", fontFamily: "inherit" };
-}
+function pill(on, col) { const c = col || C.accent; return { padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${on ? c : C.border}`, background: on ? c + "18" : "transparent", color: on ? c : C.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all .2s", fontFamily: "inherit" }; }
 const inp = { background: "#1e1e1e", border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 14px", color: C.text, fontSize: 14, fontFamily: "inherit", outline: "none", width: "100%", boxSizing: "border-box" };
 
 function TT({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null;
-  return (<div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12 }}>
-    <div style={{ color: C.textMuted, marginBottom: 4 }}>{label}</div>
-    {payload.map((p, i) => (<div key={i} style={{ color: p.fill || p.stroke, fontWeight: 600 }}>{p.name === "solo" ? "Solo" : p.name === "duo" ? "Duo" : "Total"}: {p.value}</div>))}
-  </div>);
+  return (<div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12 }}><div style={{ color: C.textMuted, marginBottom: 4 }}>{label}</div>{payload.map((p, i) => (<div key={i} style={{ color: p.fill || p.stroke, fontWeight: 600 }}>{p.name === "solo" ? "Solo" : p.name === "duo" ? "Duo" : "Total"}: {p.value}</div>))}</div>);
 }
-
 function Stat({ label, value, sub, color, big }) {
-  return (<div style={{ ...crd, flex: "1 1 120px", minWidth: big ? 150 : 110, padding: big ? "20px" : "14px 16px" }}>
-    <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600 }}>{label}</div>
-    <div style={{ fontSize: big ? 30 : 22, fontWeight: 700, color: color || C.text, marginTop: 4, lineHeight: 1 }}>{value}</div>
-    {sub && <div style={{ fontSize: 11, color: C.textSoft, marginTop: 5 }}>{sub}</div>}
-  </div>);
+  return (<div style={{ ...crd, flex: "1 1 120px", minWidth: big ? 150 : 110, padding: big ? "20px" : "14px 16px" }}><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600 }}>{label}</div><div style={{ fontSize: big ? 30 : 22, fontWeight: 700, color: color || C.text, marginTop: 4, lineHeight: 1 }}>{value}</div>{sub && <div style={{ fontSize: 11, color: C.textSoft, marginTop: 5 }}>{sub}</div>}</div>);
 }
-
 function Chips({ filter, setFilter }) {
-  return (<div style={{ display: "flex", gap: 6 }}>
-    <button onClick={() => setFilter("all")} style={pill(filter === "all", C.total)}>Tout</button>
-    <button onClick={() => setFilter("solo")} style={pill(filter === "solo", C.solo)}>Solo</button>
-    <button onClick={() => setFilter("duo")} style={pill(filter === "duo", C.duo)}>Duo</button>
-  </div>);
+  return (<div style={{ display: "flex", gap: 6 }}><button onClick={() => setFilter("all")} style={pill(filter === "all", C.total)}>Tout</button><button onClick={() => setFilter("solo")} style={pill(filter === "solo", C.solo)}>Solo</button><button onClick={() => setFilter("duo")} style={pill(filter === "duo", C.duo)}>Duo</button></div>);
 }
 
 // ─── PIN LOCK ───
-// Change ce code PIN pour le tien
-const PIN_CODE = "4682";
-
+const PIN_CODE = "1312";
 function PinLock({ onUnlock }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState(false);
-
-  const handleDigit = (d) => {
-    const next = pin + d;
-    setError(false);
-    if (next.length === 4) {
-      if (next === PIN_CODE) {
-        sessionStorage.setItem("tai_unlocked", "1");
-        onUnlock();
-      } else {
-        setError(true);
-        setPin("");
-      }
-    } else {
-      setPin(next);
-    }
-  };
-
+  const handleDigit = (d) => { const next = pin + d; setError(false); if (next.length === 4) { if (next === PIN_CODE) { sessionStorage.setItem("tai_unlocked", "1"); onUnlock(); } else { setError(true); setPin(""); } } else { setPin(next); } };
   const handleDelete = () => { setPin(p => p.slice(0, -1)); setError(false); };
-
   return (
     <div style={{ fontFamily: "'DM Sans',sans-serif", background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24, padding: 20 }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
       <div style={{ width: 44, height: 44, borderRadius: 12, background: C.accentSoft, border: `2px solid ${C.accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700, color: C.accent }}>T</div>
       <div style={{ fontSize: 14, color: C.textSoft }}>Entrez le code</div>
-      <div style={{ display: "flex", gap: 12 }}>
-        {[0, 1, 2, 3].map(i => (
-          <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: i < pin.length ? C.accent : "transparent", border: `2px solid ${error ? C.danger : i < pin.length ? C.accent : C.border}`, transition: "all .2s" }} />
-        ))}
-      </div>
+      <div style={{ display: "flex", gap: 12 }}>{[0, 1, 2, 3].map(i => (<div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: i < pin.length ? C.accent : "transparent", border: `2px solid ${error ? C.danger : i < pin.length ? C.accent : C.border}`, transition: "all .2s" }} />))}</div>
       {error && <div style={{ fontSize: 12, color: C.danger }}>Code incorrect</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginTop: 8 }}>
         {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, "del"].map((d, i) => {
           if (d === null) return <div key={i} />;
-          if (d === "del") return (
-            <button key={i} onClick={handleDelete} style={{ width: 64, height: 64, borderRadius: 32, background: "transparent", border: "none", color: C.textSoft, fontSize: 16, cursor: "pointer", fontFamily: "inherit" }}>←</button>
-          );
-          return (
-            <button key={i} onClick={() => handleDigit(String(d))} style={{ width: 64, height: 64, borderRadius: 32, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 22, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all .15s" }}>{d}</button>
-          );
+          if (d === "del") return <button key={i} onClick={handleDelete} style={{ width: 64, height: 64, borderRadius: 32, background: "transparent", border: "none", color: C.textSoft, fontSize: 16, cursor: "pointer", fontFamily: "inherit" }}>←</button>;
+          return <button key={i} onClick={() => handleDigit(String(d))} style={{ width: 64, height: 64, borderRadius: 32, background: C.card, border: `1px solid ${C.border}`, color: C.text, fontSize: 22, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>{d}</button>;
         })}
       </div>
     </div>
@@ -203,11 +162,7 @@ function PinLock({ onUnlock }) {
 // ═══════════════════════════════════════════
 export default function App() {
   const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem("tai_unlocked") === "1");
-
-  if (!unlocked) {
-    return <PinLock onUnlock={() => setUnlocked(true)} />;
-  }
-
+  if (!unlocked) return <PinLock onUnlock={() => setUnlocked(true)} />;
   return <MainApp />;
 }
 
@@ -229,75 +184,67 @@ function MainApp() {
   const loaded = useRef(false);
 
   // ─── Load ───
+  const loadData = useCallback(async () => {
+    const [sRes, cRes] = await Promise.all([
+      tursoExec("SELECT date, type FROM sessions ORDER BY date ASC"),
+      tursoExec("SELECT start, end_date FROM cycles ORDER BY start ASC"),
+    ]);
+    if (sRes.ok) {
+      setEntries(clean(sRes.rows));
+      // Map end_date to end for the app
+      setPeriods((cRes.ok ? cRes.rows : []).map(c => ({ start: c.start, end: c.end_date })).filter(c => c.start && c.end));
+      setSync("ok");
+      return true;
+    }
+    return false;
+  }, []);
+
   useEffect(() => {
     if (loaded.current) return;
     loaded.current = true;
     (async () => {
       setSync("loading");
-      const data = await loadAll();
-      if (data && Array.isArray(data.sessions)) {
-        if (data.sessions.length === 0) {
-          // Empty DB → import seed
-          setEntries(SEED);
-          setSync("importing");
-          await supa("sessions", "POST", SEED);
-          setSync("ok");
-        } else {
-          setEntries(clean(data.sessions));
-          setPeriods(cleanC(data.cycles));
-          setSync("ok");
-        }
-      } else {
-        setEntries(SEED);
-        setSync("offline");
-      }
+      const ok = await loadData();
+      if (!ok) { setEntries(SEED); setSync("offline"); }
     })();
-  }, []);
+  }, [loadData]);
 
-  // ─── Reload ───
-  const reload = useCallback(async () => {
-    const data = await loadAll();
-    if (data && Array.isArray(data.sessions)) {
-      setEntries(clean(data.sessions));
-      setPeriods(cleanC(data.cycles));
-      setSync("ok");
-    }
-  }, []);
+  // Timeout fallback
+  useEffect(() => { if (sync === "loading" && entries.length === 0) { const t = setTimeout(() => { setEntries(SEED); setSync("offline"); }, 5000); return () => clearTimeout(t); } }, [sync, entries.length]);
 
   // ─── CRUD ───
   const addEntry = async () => {
     const ne = { date: addDate, type: addType };
     setEntries(prev => [...prev, ne].sort((a, b) => (a.date || "").localeCompare(b.date || "")));
     setModal(null);
-    const r = await supa("sessions", "POST", { date: addDate, type: addType });
-    setSync(r && r.success ? "ok" : "error");
+    const r = await tursoExec("INSERT INTO sessions (date, type) VALUES (?, ?)", [{ type: "text", value: addDate }, { type: "text", value: addType }]);
+    setSync(r.ok ? "ok" : "error");
   };
 
   const delEntry = async (idx) => {
     const entry = entries[idx];
     setEntries(prev => prev.filter((_, i) => i !== idx));
     setModal(null);
-    const r = await supa("sessions", "DELETE", null, `?date=eq.${entry.date}&type=eq.${entry.type}&limit=1`);
-    setSync(r && r.success ? "ok" : "error");
-    // Reload to stay in sync (DELETE might affect multiple rows)
-    setTimeout(reload, 500);
+    const r = await tursoExec("DELETE FROM sessions WHERE id = (SELECT id FROM sessions WHERE date = ? AND type = ? LIMIT 1)", [{ type: "text", value: entry.date }, { type: "text", value: entry.type }]);
+    setSync(r.ok ? "ok" : "error");
+    setTimeout(loadData, 500);
   };
 
   const addPeriodFn = async () => {
     const np = { start: pStart, end: pEnd };
     setPeriods(prev => [...prev, np].sort((a, b) => (a.start || "").localeCompare(b.start || "")));
     setModal(null);
-    const r = await supa("cycles", "POST", { start: pStart, end: pEnd });
-    setSync(r && r.success ? "ok" : "error");
+    const r = await tursoExec("INSERT INTO cycles (start, end_date) VALUES (?, ?)", [{ type: "text", value: pStart }, { type: "text", value: pEnd }]);
+    setSync(r.ok ? "ok" : "error");
   };
 
   const delPeriod = async (idx) => {
     const p = periods[idx];
     setPeriods(prev => prev.filter((_, i) => i !== idx));
     setModal(null);
-    const r = await supa("cycles", "DELETE", null, `?start=eq.${p.start}&end=eq.${p.end}&limit=1`);
-    setSync(r && r.success ? "ok" : "error");
-    setTimeout(reload, 500);
+    const r = await tursoExec("DELETE FROM cycles WHERE id = (SELECT id FROM cycles WHERE start = ? AND end_date = ? LIMIT 1)", [{ type: "text", value: p.start }, { type: "text", value: p.end }]);
+    setSync(r.ok ? "ok" : "error");
+    setTimeout(loadData, 500);
   };
 
   // ─── Filtered ───
@@ -307,7 +254,7 @@ function MainApp() {
   const stats = useMemo(() => {
     const valid = fE.filter(e => e && e.date && e.type);
     if (valid.length === 0) return null;
-    const sorted = [...valid].sort((a, b) => (a.date).localeCompare(b.date));
+    const sorted = [...valid].sort((a, b) => a.date.localeCompare(b.date));
     const first = prsD(sorted[0].date), last = prsD(sorted[sorted.length - 1].date);
     const totalDays = Math.max(1, diffD(first, last));
     const totalWeeks = Math.max(1, totalDays / 7);
@@ -370,9 +317,6 @@ function MainApp() {
   const prevCal = () => { if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); } else setCalMonth(m => m - 1); };
   const nextCal = () => { if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); };
 
-  // ─── Timeout fallback ───
-  useEffect(() => { if (sync === "loading" && entries.length === 0) { const t = setTimeout(() => { setEntries(SEED); setSync("offline"); }, 5000); return () => clearTimeout(t); } }, [sync, entries.length]);
-
   // ─── Loading ───
   if (sync === "loading" && entries.length === 0) {
     return (<div style={{ fontFamily: "'DM Sans',sans-serif", background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
@@ -382,7 +326,6 @@ function MainApp() {
     </div>);
   }
 
-  // ═══ RENDER ═══
   return (
     <div style={{ fontFamily: "'DM Sans',-apple-system,sans-serif", background: C.bg, color: C.text, minHeight: "100vh", maxWidth: 480, margin: "0 auto", position: "relative", paddingBottom: 76 }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -396,85 +339,49 @@ function MainApp() {
           <div style={{ width: 7, height: 7, borderRadius: "50%", marginLeft: 4, background: sync === "ok" ? C.success : sync === "offline" ? C.duo : sync === "error" ? C.danger : C.textMuted }} />
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={reload} style={{ ...pill(false), padding: "6px 10px", fontSize: 14 }}>↻</button>
+          <button onClick={loadData} style={{ ...pill(false), padding: "6px 10px", fontSize: 14 }}>↻</button>
           <button onClick={() => { setAddDate(NOW_S); setModal("add"); }} style={{ ...pill(true, C.accent), padding: "7px 14px" }}>+ Session</button>
         </div>
       </div>
 
       <div style={{ padding: "14px 14px 0" }}>
-
-        {/* ═══ HOME ═══ */}
+        {/* HOME */}
         {tab === "home" && stats && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ display: "flex", gap: 8 }}>
-            <Stat label="Cette semaine" value={stats.thisWeek} sub={`sem. du ${prsD(MON_S).getDate()} ${MFR[prsD(MON_S).getMonth()]}`} color={C.accent} big />
-            <Stat label="Ce mois-ci" value={stats.thisMonth} sub={MFULL[NOW.getMonth()]} color={C.total} big />
-          </div>
+          <div style={{ display: "flex", gap: 8 }}><Stat label="Cette semaine" value={stats.thisWeek} sub={`sem. du ${prsD(MON_S).getDate()} ${MFR[prsD(MON_S).getMonth()]}`} color={C.accent} big /><Stat label="Ce mois-ci" value={stats.thisMonth} sub={MFULL[NOW.getMonth()]} color={C.total} big /></div>
           <div style={{ ...crd, background: `linear-gradient(135deg, ${C.card}, ${C.accentSoft})`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600 }}>Moyenne (3 derniers mois)</div>
-              <div style={{ marginTop: 5, display: "flex", gap: 14, alignItems: "baseline" }}>
-                <span style={{ fontSize: 24, fontWeight: 700, color: C.accent }}>{stats.a3w}<span style={{ fontSize: 11, fontWeight: 400, color: C.textSoft }}>/sem</span></span>
-                <span style={{ fontSize: 16, fontWeight: 600, color: C.textSoft }}>{stats.a3m}<span style={{ fontSize: 11, fontWeight: 400 }}>/mois</span></span>
-              </div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 10, color: C.textMuted }}>Dernière</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: stats.dSince === 0 ? C.accent : stats.dSince <= 2 ? C.text : C.textSoft }}>{stats.dSince === 0 ? "Auj." : stats.dSince + "j"}</div>
-            </div>
+            <div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".1em", fontWeight: 600 }}>Moyenne (3 derniers mois)</div><div style={{ marginTop: 5, display: "flex", gap: 14, alignItems: "baseline" }}><span style={{ fontSize: 24, fontWeight: 700, color: C.accent }}>{stats.a3w}<span style={{ fontSize: 11, fontWeight: 400, color: C.textSoft }}>/sem</span></span><span style={{ fontSize: 16, fontWeight: 600, color: C.textSoft }}>{stats.a3m}<span style={{ fontSize: 11, fontWeight: 400 }}>/mois</span></span></div></div>
+            <div style={{ textAlign: "right" }}><div style={{ fontSize: 10, color: C.textMuted }}>Dernière</div><div style={{ fontSize: 13, fontWeight: 600, color: stats.dSince === 0 ? C.accent : stats.dSince <= 2 ? C.text : C.textSoft }}>{stats.dSince === 0 ? "Auj." : stats.dSince + "j"}</div></div>
           </div>
           <Chips filter={filter} setFilter={setFilter} />
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Stat label="Total" value={stats.total} color={C.total} />
-            <Stat label="Record" value={stats.maxStr + "j"} sub="consécutifs" color={C.duo} />
-            <Stat label="Gap max" value={stats.maxGap + "j"} color={C.textMuted} />
-          </div>
-          <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Activité mensuelle</div>
-            <ResponsiveContainer width="100%" height={190}><BarChart data={mChart} barGap={1}><CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" /><XAxis dataKey="m" tick={{ fill: C.textMuted, fontSize: 9 }} tickFormatter={v => MFR[parseInt(v.split("-")[1]) - 1]} /><YAxis tick={{ fill: C.textMuted, fontSize: 9 }} allowDecimals={false} width={20} /><Tooltip content={<TT />} />{(filter === "all" || filter === "solo") && <Bar dataKey="solo" fill={C.solo} radius={[3, 3, 0, 0]} name="solo" />}{(filter === "all" || filter === "duo") && <Bar dataKey="duo" fill={C.duo} radius={[3, 3, 0, 0]} name="duo" />}</BarChart></ResponsiveContainer>
-          </div>
-          <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Tendance</div>
-            <ResponsiveContainer width="100%" height={150}><LineChart data={trend}><CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" /><XAxis dataKey="label" tick={{ fill: C.textMuted, fontSize: 9 }} /><YAxis tick={{ fill: C.textMuted, fontSize: 9 }} allowDecimals={false} width={20} /><Tooltip content={<TT />} /><Line type="monotone" dataKey="count" stroke={C.accent} strokeWidth={2} dot={{ r: 2.5, fill: C.accent }} name="count" /></LineChart></ResponsiveContainer>
-          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><Stat label="Total" value={stats.total} color={C.total} /><Stat label="Record" value={stats.maxStr + "j"} sub="consécutifs" color={C.duo} /><Stat label="Gap max" value={stats.maxGap + "j"} color={C.textMuted} /></div>
+          <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Activité mensuelle</div><ResponsiveContainer width="100%" height={190}><BarChart data={mChart} barGap={1}><CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" /><XAxis dataKey="m" tick={{ fill: C.textMuted, fontSize: 9 }} tickFormatter={v => MFR[parseInt(v.split("-")[1]) - 1]} /><YAxis tick={{ fill: C.textMuted, fontSize: 9 }} allowDecimals={false} width={20} /><Tooltip content={<TT />} />{(filter === "all" || filter === "solo") && <Bar dataKey="solo" fill={C.solo} radius={[3, 3, 0, 0]} name="solo" />}{(filter === "all" || filter === "duo") && <Bar dataKey="duo" fill={C.duo} radius={[3, 3, 0, 0]} name="duo" />}</BarChart></ResponsiveContainer></div>
+          <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Tendance</div><ResponsiveContainer width="100%" height={150}><LineChart data={trend}><CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" /><XAxis dataKey="label" tick={{ fill: C.textMuted, fontSize: 9 }} /><YAxis tick={{ fill: C.textMuted, fontSize: 9 }} allowDecimals={false} width={20} /><Tooltip content={<TT />} /><Line type="monotone" dataKey="count" stroke={C.accent} strokeWidth={2} dot={{ r: 2.5, fill: C.accent }} name="count" /></LineChart></ResponsiveContainer></div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <div style={{ ...crd, flex: "1 1 55%" }}><div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>Jour favori : <span style={{ color: C.accent }}>{stats.favDay}</span></div><ResponsiveContainer width="100%" height={120}><BarChart data={dowC}><XAxis dataKey="day" tick={{ fill: C.textMuted, fontSize: 9 }} /><YAxis hide /><Bar dataKey="count" fill={C.accent} radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>
             <div style={{ ...crd, flex: "1 1 35%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}><div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2, alignSelf: "flex-start" }}>Ratio</div><ResponsiveContainer width="100%" height={100}><PieChart><Pie data={[{ name: "Solo", value: stats.solo }, { name: "Duo", value: stats.duo }]} cx="50%" cy="50%" innerRadius={25} outerRadius={42} paddingAngle={4} dataKey="value"><Cell fill={C.solo} /><Cell fill={C.duo} /></Pie></PieChart></ResponsiveContainer><div style={{ display: "flex", gap: 10, fontSize: 10, marginTop: 2 }}><span><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: C.solo, marginRight: 3 }} />Solo {stats.solo + stats.duo > 0 ? Math.round(stats.solo / (stats.solo + stats.duo) * 100) : 0}%</span><span><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: C.duo, marginRight: 3 }} />Duo {stats.solo + stats.duo > 0 ? Math.round(stats.duo / (stats.solo + stats.duo) * 100) : 0}%</span></div></div>
           </div>
         </div>)}
 
-        {/* ═══ CALENDAR ═══ */}
+        {/* CALENDAR */}
         {tab === "calendar" && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ ...crd, padding: 18 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <button onClick={prevCal} style={{ background: "none", border: "none", color: C.textSoft, cursor: "pointer", fontSize: 20, padding: "4px 10px" }}>‹</button>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>{MFULL[calMonth]} {calYear}</div>
-              <button onClick={nextCal} style={{ background: "none", border: "none", color: C.textSoft, cursor: "pointer", fontSize: 20, padding: "4px 10px" }}>›</button>
-            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}><button onClick={prevCal} style={{ background: "none", border: "none", color: C.textSoft, cursor: "pointer", fontSize: 20, padding: "4px 10px" }}>‹</button><div style={{ fontSize: 15, fontWeight: 600 }}>{MFULL[calMonth]} {calYear}</div><button onClick={nextCal} style={{ background: "none", border: "none", color: C.textSoft, cursor: "pointer", fontSize: 20, padding: "4px 10px" }}>›</button></div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, marginBottom: 4 }}>{["L", "M", "M", "J", "V", "S", "D"].map((d, i) => (<div key={i} style={{ textAlign: "center", fontSize: 10, color: C.textMuted, fontWeight: 600, padding: "3px 0" }}>{d}</div>))}</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 3 }}>
               {calD.map((d, i) => {
                 if (d === null) return <div key={i} />;
                 const hS = d.en && d.en.solo > 0, hD = d.en && d.en.duo > 0;
-                let bg = "transparent";
-                if (d.per === "period") bg = C.periodSoft; else if (d.per === "predicted") bg = "rgba(236,72,153,0.05)"; else if (d.fer) bg = C.fertile;
-                let bdr = "1px solid transparent";
-                if (d.today) bdr = `2px solid ${C.accent}`; else if (d.per === "predicted") bdr = `1px dashed ${C.periodBorder}`; else if (d.fer) bdr = `1px solid ${C.fertileBorder}`;
-                return (<div key={i} style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", borderRadius: 10, background: bg, border: bdr, cursor: "default" }}>
-                  <span style={{ fontSize: 11, color: d.today ? C.accent : (hS || hD) ? C.text : C.textMuted, fontWeight: d.today ? 700 : 400 }}>{d.day}</span>
-                  {(hS || hD) && (<div style={{ display: "flex", gap: 2, marginTop: 1 }}>{hD && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.duo }} />}{hS && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.solo }} />}</div>)}
-                </div>);
+                let bg = "transparent"; if (d.per === "period") bg = C.periodSoft; else if (d.per === "predicted") bg = "rgba(236,72,153,0.05)"; else if (d.fer) bg = C.fertile;
+                let bdr = "1px solid transparent"; if (d.today) bdr = `2px solid ${C.accent}`; else if (d.per === "predicted") bdr = `1px dashed ${C.periodBorder}`; else if (d.fer) bdr = `1px solid ${C.fertileBorder}`;
+                return (<div key={i} style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", borderRadius: 10, background: bg, border: bdr, cursor: "default" }}><span style={{ fontSize: 11, color: d.today ? C.accent : (hS || hD) ? C.text : C.textMuted, fontWeight: d.today ? 700 : 400 }}>{d.day}</span>{(hS || hD) && (<div style={{ display: "flex", gap: 2, marginTop: 1 }}>{hD && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.duo }} />}{hS && <div style={{ width: 5, height: 5, borderRadius: "50%", background: C.solo }} />}</div>)}</div>);
               })}
             </div>
-            <div style={{ display: "flex", gap: 10, marginTop: 12, justifyContent: "center", fontSize: 9, color: C.textMuted, flexWrap: "wrap" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: C.duo }} />Duo</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: C.solo }} />Solo</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: C.periodSoft, border: `1px solid ${C.periodBorder}` }} />Règles</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: 2, border: `1px dashed ${C.periodBorder}` }} />Prévu</span>
-              {pInfo && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: C.fertile, border: `1px solid ${C.fertileBorder}` }} />Fertile</span>}
-            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 12, justifyContent: "center", fontSize: 9, color: C.textMuted, flexWrap: "wrap" }}><span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: C.duo }} />Duo</span><span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: C.solo }} />Solo</span><span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: C.periodSoft, border: `1px solid ${C.periodBorder}` }} />Règles</span><span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: 2, border: `1px dashed ${C.periodBorder}` }} />Prévu</span>{pInfo && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: C.fertile, border: `1px solid ${C.fertileBorder}` }} />Fertile</span>}</div>
           </div>
           {(() => { const pf = `${calYear}-${String(calMonth + 1).padStart(2, "0")}`; const me = entries.filter(e => e.date && e.date.startsWith(pf)); if (me.length === 0) return null; const sc = me.filter(e => e.type === "solo").length, dc = me.filter(e => e.type === "duo").length; return (<div style={{ display: "flex", flexDirection: "column", gap: 10 }}><div style={{ display: "flex", gap: 8 }}><Stat label="Total" value={me.length} color={C.total} /><Stat label="Solo" value={sc} color={C.solo} /><Stat label="Duo" value={dc} color={C.duo} /></div><div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Sessions</div>{[...me].sort((a, b) => b.date.localeCompare(a.date)).map((e, i) => { const dd = prsD(e.date); return (<div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < me.length - 1 ? `1px solid ${C.border}` : "none" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><div style={{ width: 6, height: 6, borderRadius: "50%", background: e.type === "duo" ? C.duo : C.solo }} /><span style={{ fontSize: 12, color: C.textSoft }}>{DFR[dd.getDay()]} {dd.getDate()}</span><span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 600, background: e.type === "duo" ? C.duoSoft : C.soloSoft, color: e.type === "duo" ? C.duo : C.solo }}>{e.type === "duo" ? "Duo" : "Solo"}</span></div><button onClick={() => setModal({ delete: entries.indexOf(e) })} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 14, padding: "2px 6px" }}>×</button></div>); })}</div></div>); })()}
         </div>)}
 
-        {/* ═══ MONTHLY ═══ */}
+        {/* MONTHLY */}
         {tab === "monthly" && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Chips filter={filter} setFilter={setFilter} />
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{years.map(y => <button key={y} onClick={() => setSelYear(y)} style={pill(selYear === y)}>{y}</button>)}</div>
@@ -482,63 +389,31 @@ function MainApp() {
           {(() => { const mk = `${selYear}-${String(selMonth + 1).padStart(2, "0")}`; const me = fE.filter(e => e.date && e.date.startsWith(mk)); if (me.length === 0) return null; const sc = me.filter(e => e.type === "solo").length, dc = me.filter(e => e.type === "duo").length, w = new Date(selYear, selMonth + 1, 0).getDate() / 7; return (<div style={{ display: "flex", flexDirection: "column", gap: 10 }}><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><Stat label="Total" value={me.length} sub={`${(me.length / w).toFixed(1)}/sem`} color={C.total} /><Stat label="Solo" value={sc} color={C.solo} /><Stat label="Duo" value={dc} color={C.duo} /></div>{wChart.length > 0 && <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Par semaine</div><ResponsiveContainer width="100%" height={170}><BarChart data={wChart} barGap={1}><CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" /><XAxis dataKey="label" tick={{ fill: C.textMuted, fontSize: 9 }} /><YAxis tick={{ fill: C.textMuted, fontSize: 9 }} allowDecimals={false} width={20} /><Tooltip content={<TT />} />{(filter === "all" || filter === "solo") && <Bar dataKey="solo" fill={C.solo} radius={[3, 3, 0, 0]} name="solo" />}{(filter === "all" || filter === "duo") && <Bar dataKey="duo" fill={C.duo} radius={[3, 3, 0, 0]} name="duo" />}</BarChart></ResponsiveContainer></div>}</div>); })()}
         </div>)}
 
-        {/* ═══ CYCLES ═══ */}
+        {/* CYCLES */}
         {tab === "cycles" && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <button onClick={() => setModal("period")} style={{ ...pill(true, C.period), padding: "10px 16px", alignSelf: "flex-start" }}>+ Enregistrer des règles</button>
-          {pInfo && (<div style={{ ...crd, background: C.periodSoft, border: `1px solid ${C.periodBorder}` }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.period, marginBottom: 12 }}>Prévision prochain cycle</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Début</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{prsD(pInfo.preds[0].start).getDate()} {MFULL[prsD(pInfo.preds[0].start).getMonth()]}</div></div>
-              <div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Fin</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{prsD(pInfo.preds[0].end).getDate()} {MFULL[prsD(pInfo.preds[0].end).getMonth()]}</div></div>
-              <div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Cycle moy.</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{pInfo.avgC}j</div></div>
-              <div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Durée moy.</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{pInfo.avgD}j</div></div>
-            </div>
-            <div style={{ marginTop: 10, padding: "8px 12px", background: C.fertile, borderRadius: 8, border: `1px solid ${C.fertileBorder}` }}><span style={{ fontSize: 11, color: C.fertileText, fontWeight: 600 }}>Fenêtre fertile : {prsD(pInfo.preds[0].fs).getDate()} {MFR[prsD(pInfo.preds[0].fs).getMonth()]} → {prsD(pInfo.preds[0].fe).getDate()} {MFR[prsD(pInfo.preds[0].fe).getMonth()]}</span></div>
-          </div>)}
-          <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Historique</div>
-            {periods.length === 0 && <p style={{ color: C.textMuted, fontSize: 12, margin: 0 }}>Aucun cycle enregistré.</p>}
-            {[...periods].sort((a, b) => b.start.localeCompare(a.start)).map((p, i) => { const ds = prsD(p.start), de = prsD(p.end); return (<div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < periods.length - 1 ? `1px solid ${C.border}` : "none" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><div style={{ width: 6, height: 6, borderRadius: "50%", background: C.period }} /><span style={{ fontSize: 12 }}>{ds.getDate()} {MFR[ds.getMonth()]} → {de.getDate()} {MFR[de.getMonth()]} {de.getFullYear()}</span><span style={{ fontSize: 10, color: C.textMuted }}>({diffD(ds, de)}j)</span></div><button onClick={() => setModal({ deletePeriod: i })} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 14, padding: "2px 6px" }}>×</button></div>); })}
-          </div>
+          {pInfo && (<div style={{ ...crd, background: C.periodSoft, border: `1px solid ${C.periodBorder}` }}><div style={{ fontSize: 14, fontWeight: 600, color: C.period, marginBottom: 12 }}>Prévision prochain cycle</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}><div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Début</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{prsD(pInfo.preds[0].start).getDate()} {MFULL[prsD(pInfo.preds[0].start).getMonth()]}</div></div><div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Fin</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{prsD(pInfo.preds[0].end).getDate()} {MFULL[prsD(pInfo.preds[0].end).getMonth()]}</div></div><div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Cycle moy.</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{pInfo.avgC}j</div></div><div><div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: ".08em" }}>Durée moy.</div><div style={{ fontSize: 17, fontWeight: 700, marginTop: 3 }}>{pInfo.avgD}j</div></div></div><div style={{ marginTop: 10, padding: "8px 12px", background: C.fertile, borderRadius: 8, border: `1px solid ${C.fertileBorder}` }}><span style={{ fontSize: 11, color: C.fertileText, fontWeight: 600 }}>Fenêtre fertile : {prsD(pInfo.preds[0].fs).getDate()} {MFR[prsD(pInfo.preds[0].fs).getMonth()]} → {prsD(pInfo.preds[0].fe).getDate()} {MFR[prsD(pInfo.preds[0].fe).getMonth()]}</span></div></div>)}
+          <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Historique</div>{periods.length === 0 && <p style={{ color: C.textMuted, fontSize: 12, margin: 0 }}>Aucun cycle enregistré.</p>}{[...periods].sort((a, b) => b.start.localeCompare(a.start)).map((p, i) => { const ds = prsD(p.start), de = prsD(p.end); return (<div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < periods.length - 1 ? `1px solid ${C.border}` : "none" }}><div style={{ display: "flex", alignItems: "center", gap: 7 }}><div style={{ width: 6, height: 6, borderRadius: "50%", background: C.period }} /><span style={{ fontSize: 12 }}>{ds.getDate()} {MFR[ds.getMonth()]} → {de.getDate()} {MFR[de.getMonth()]} {de.getFullYear()}</span><span style={{ fontSize: 10, color: C.textMuted }}>({diffD(ds, de)}j)</span></div><button onClick={() => setModal({ deletePeriod: i })} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 14, padding: "2px 6px" }}>×</button></div>); })}</div>
           {pInfo && pInfo.preds.length > 1 && <div style={crd}><div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>6 prochains cycles</div>{pInfo.preds.map((p, i) => { const ds = prsD(p.start); return (<div key={i} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 0", borderBottom: i < 5 ? `1px solid ${C.border}` : "none", opacity: .5 + .5 / (i + 1) }}><span style={{ fontSize: 10, color: C.period, fontWeight: 700 }}>#{i + 1}</span><span style={{ fontSize: 12 }}>{ds.getDate()} {MFULL[ds.getMonth()]} {ds.getFullYear()}</span><span style={{ fontSize: 10, color: C.textMuted }}>({pInfo.avgD}j)</span></div>); })}</div>}
         </div>)}
 
-        {/* ═══ MORE ═══ */}
+        {/* MORE */}
         {tab === "more" && (<div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Synchronisation</div>
-          <div style={{ ...crd, display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", background: sync === "ok" ? C.success : sync === "offline" ? C.duo : sync === "error" ? C.danger : C.textMuted }} />
-            <span style={{ fontSize: 13, color: C.textSoft }}>{sync === "ok" ? "Connecté à Supabase" : sync === "offline" ? "Mode hors ligne" : sync === "error" ? "Erreur" : "..."}</span>
-            <button onClick={reload} style={{ ...pill(false), marginLeft: "auto", padding: "6px 12px" }}>Sync</button>
-          </div>
+          <div style={{ ...crd, display: "flex", alignItems: "center", gap: 10 }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: sync === "ok" ? C.success : sync === "offline" ? C.duo : sync === "error" ? C.danger : C.textMuted }} /><span style={{ fontSize: 13, color: C.textSoft }}>{sync === "ok" ? "Connecté à Turso" : sync === "offline" ? "Mode hors ligne" : sync === "error" ? "Erreur" : "..."}</span><button onClick={loadData} style={{ ...pill(false), marginLeft: "auto", padding: "6px 12px" }}>Sync</button></div>
           <div style={{ fontSize: 14, fontWeight: 600, marginTop: 6 }}>Exporter</div>
-          <div style={{ ...crd, display: "flex", flexDirection: "column", gap: 8 }}>
-            <button onClick={exportCSV} style={{ ...pill(true, C.accent), padding: "12px", textAlign: "center", width: "100%", borderRadius: 10 }}>Exporter CSV</button>
-            <button onClick={exportJSON} style={{ ...pill(true, C.total), padding: "12px", textAlign: "center", width: "100%", borderRadius: 10 }}>Exporter JSON</button>
-          </div>
+          <div style={{ ...crd, display: "flex", flexDirection: "column", gap: 8 }}><button onClick={exportCSV} style={{ ...pill(true, C.accent), padding: "12px", textAlign: "center", width: "100%", borderRadius: 10 }}>Exporter CSV</button><button onClick={exportJSON} style={{ ...pill(true, C.total), padding: "12px", textAlign: "center", width: "100%", borderRadius: 10 }}>Exporter JSON</button></div>
           <div style={{ fontSize: 14, fontWeight: 600, marginTop: 6 }}>Résumé</div>
-          {stats && (<div style={{ ...crd, fontSize: 12, lineHeight: 2.2, color: C.textSoft }}>
-            <div><strong style={{ color: C.text }}>{stats.total}</strong> sessions</div>
-            <div><strong style={{ color: C.solo }}>{stats.solo}</strong> solo · <strong style={{ color: C.duo }}>{stats.duo}</strong> duo</div>
-            <div>Fréquence : <strong style={{ color: C.accent }}>{stats.pw}/sem</strong></div>
-            <div>Jour favori : <strong style={{ color: C.text }}>{stats.favDay}</strong></div>
-            <div>Record : <strong style={{ color: C.duo }}>{stats.maxStr}j</strong> · Gap max : <strong style={{ color: C.textMuted }}>{stats.maxGap}j</strong></div>
-            {pInfo && <div>Cycle moyen : <strong style={{ color: C.period }}>{pInfo.avgC}j</strong></div>}
-          </div>)}
+          {stats && (<div style={{ ...crd, fontSize: 12, lineHeight: 2.2, color: C.textSoft }}><div><strong style={{ color: C.text }}>{stats.total}</strong> sessions</div><div><strong style={{ color: C.solo }}>{stats.solo}</strong> solo · <strong style={{ color: C.duo }}>{stats.duo}</strong> duo</div><div>Fréquence : <strong style={{ color: C.accent }}>{stats.pw}/sem</strong></div><div>Jour favori : <strong style={{ color: C.text }}>{stats.favDay}</strong></div><div>Record : <strong style={{ color: C.duo }}>{stats.maxStr}j</strong> · Gap max : <strong style={{ color: C.textMuted }}>{stats.maxGap}j</strong></div>{pInfo && <div>Cycle moyen : <strong style={{ color: C.period }}>{pInfo.avgC}j</strong></div>}</div>)}
           <div style={{ fontSize: 14, fontWeight: 600, marginTop: 6 }}>Installation</div>
-          <div style={{ ...crd, fontSize: 12, color: C.textSoft, lineHeight: 1.8 }}>
-            <strong style={{ color: C.text }}>Android :</strong> Chrome → ⋮ → "Ajouter à l'écran d'accueil"
-            <br /><strong style={{ color: C.text }}>iPhone :</strong> Safari → Partager → "Sur l'écran d'accueil"
-            <br /><br /><span style={{ color: C.textMuted }}>Nom : "TAI". Données stockées sur Supabase (cloud sécurisé).</span>
-          </div>
+          <div style={{ ...crd, fontSize: 12, color: C.textSoft, lineHeight: 1.8 }}><strong style={{ color: C.text }}>Android :</strong> Chrome → ⋮ → "Ajouter à l'écran d'accueil"<br /><strong style={{ color: C.text }}>iPhone :</strong> Safari → Partager → "Sur l'écran d'accueil"<br /><br /><span style={{ color: C.textMuted }}>Nom : "TAI". Données stockées sur Turso (SQLite cloud).</span></div>
         </div>)}
       </div>
 
       {/* Bottom Nav */}
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: C.surface + "ee", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-around", padding: "6px 0 env(safe-area-inset-bottom, 10px)", zIndex: 50, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)" }}>
         {[{ id: "home", icon: "◉", l: "Accueil" }, { id: "calendar", icon: "▦", l: "Calendrier" }, { id: "monthly", icon: "▤", l: "Mensuel" }, { id: "cycles", icon: "◎", l: "Cycles" }, { id: "more", icon: "⋯", l: "Plus" }].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, color: tab === t.id ? C.accent : C.textMuted, transition: "color .2s", fontFamily: "inherit", padding: "4px 6px" }}>
-            <span style={{ fontSize: 17 }}>{t.icon}</span><span style={{ fontSize: 9, fontWeight: tab === t.id ? 600 : 400 }}>{t.l}</span>
-          </button>))}
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, color: tab === t.id ? C.accent : C.textMuted, transition: "color .2s", fontFamily: "inherit", padding: "4px 6px" }}><span style={{ fontSize: 17 }}>{t.icon}</span><span style={{ fontSize: 9, fontWeight: tab === t.id ? 600 : 400 }}>{t.l}</span></button>))}
       </div>
 
       {/* Modals */}
